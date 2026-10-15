@@ -18,3 +18,8 @@ faiss-cpu>=1.15.1
 
 # ===== 文档解析 =====
 pypdf>=4.0
+
+# ===== Web 服务（M3）=====
+# 已在 Python 3.13 上实测：fastapi 0.143 / uvicorn 0.54 / pydantic 2.14
+fastapi>=0.115
+uvicorn>=0.30

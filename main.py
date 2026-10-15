@@ -4,11 +4,16 @@
     python main.py --check                     环境自检
     python main.py warmup                      预下载本地模型（向量化 + 重排）
     python main.py ingest                      构建知识库索引（扫描 data/docs/）
-    python main.py ask "你的问题"               提问（混合检索 → 重排 → 生成）
+    python main.py ask "你的问题"               单轮提问（混合检索 → 重排 → 生成）
     python main.py ask "问题" --rerank none     指定重排后端做 A/B 对比
+    python main.py chat                        多轮对话（记忆 + 查询改写）
+    python main.py web                         启动 Web 界面
     python main.py eval                        运行评测集（检索 + 重排 + 回答质量）
     python main.py eval --compare              对比三种重排后端的效果与耗时
+    python main.py eval --multi-turn           评测多轮改写效果（改写开关对比）
     python main.py bench                       性能基准（向量后端 + 重排后端延迟）
+
+chat 会话内的命令：/new 新会话　/history 查看历史　/quit 退出
 """
 import argparse
 import sys
@@ -33,6 +38,8 @@ REQUIRED_PACKAGES = [
 ]
 OPTIONAL_PACKAGES = [
     ("faiss", "向量索引（FAISS，缺失时自动退回 NumPy）"),
+    ("fastapi", "Web 服务（python main.py web 需要）"),
+    ("uvicorn", "Web 服务（python main.py web 需要）"),
 ]
 
 RERANK_CHOICES = ["auto", "cross-encoder", "llm", "none"]
@@ -159,17 +166,7 @@ def cmd_ask(question: str, rerank_backend: str) -> int:
     console.print(Panel(Markdown(result["answer"]),
                         title="回答", border_style="green", padding=(1, 2)))
 
-    if result["citations"]:
-        table = Table(title="引用来源", show_lines=True, expand=True)
-        table.add_column("#", width=3, justify="center")
-        table.add_column("文档", style="cyan", no_wrap=True)
-        table.add_column("位置", width=8, justify="center")
-        table.add_column("原文片段", overflow="fold")
-        for c in result["citations"]:
-            snippet = c["text"][:120].replace("\n", " ")
-            table.add_row(str(c["id"]), c["doc"], f"第 {c['position']} 段",
-                          snippet + ("..." if len(c["text"]) > 120 else ""))
-        console.print(table)
+    _print_citations(result["citations"])
 
     info = result["rerank"]
     timing = result["timings"]
@@ -299,6 +296,113 @@ def cmd_bench(repeat: int, scale: int, rerank_backends: list[str]) -> int:
     return 0
 
 
+def _print_citations(citations: list[dict]) -> None:
+    if not citations:
+        return
+    table = Table(title="引用来源", show_lines=True, expand=True)
+    table.add_column("#", width=3, justify="center")
+    table.add_column("文档", style="cyan", no_wrap=True)
+    table.add_column("位置", width=8, justify="center")
+    table.add_column("原文片段", overflow="fold")
+    for c in citations:
+        snippet = c["text"][:120].replace("\n", " ")
+        table.add_row(str(c["id"]), c["doc"], f"第 {c['position']} 段",
+                      snippet + ("..." if len(c["text"]) > 120 else ""))
+    console.print(table)
+
+
+def cmd_chat(rewrite_backend: str | None, rerank_backend: str | None) -> int:
+    """多轮对话（会话记忆 + 查询改写）"""
+    from src import config, rag
+    from src.memory import SessionStore
+    from src.retriever import HybridRetriever
+
+    try:
+        retriever = HybridRetriever()
+    except Exception as e:  # noqa: BLE001
+        console.print(f"[red]索引加载失败：{e}[/red]")
+        console.print("请先运行 python main.py ingest\n")
+        return 1
+
+    sessions = SessionStore()
+    memory = sessions.get()
+    console.print(Panel(
+        f"多轮对话已开始（会话 [bold]{memory.session_id}[/bold]）\n"
+        f"向量后端 {retriever.backend}｜重排 {config.RERANK_BACKEND}｜改写 {config.REWRITE_BACKEND}\n"
+        "支持追问（如「那它的 k 是多少？」）。输入 /new 换会话，/history 看历史，/quit 退出。",
+        border_style="blue"))
+
+    while True:
+        try:
+            question = console.input("\n[bold blue]你 >[/bold blue] ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+
+        if not question:
+            continue
+        if question in ("/quit", "/exit", "退出"):
+            break
+        if question == "/new":
+            sessions.delete(memory.session_id)
+            memory = sessions.get()
+            console.print(f"[green]已开启新会话 {memory.session_id}[/green]")
+            continue
+        if question == "/history":
+            for i, turn in enumerate(memory.turns, start=1):
+                role = "你" if turn.role == "user" else "助手"
+                console.print(f"{i}. {role}：{turn.content[:100]}")
+            if memory.summary:
+                console.print(f"[dim]摘要：{memory.summary}[/dim]")
+            continue
+        if len(question) > config.MAX_QUESTION_CHARS:
+            console.print(f"[yellow]问题过长（>{config.MAX_QUESTION_CHARS} 字），已拒绝[/yellow]")
+            continue
+
+        with console.status("检索并生成回答中..."):
+            result = rag.answer_turn(question, retriever=retriever, memory=memory,
+                                     rewrite_backend=rewrite_backend,
+                                     rerank_backend=rerank_backend, store=sessions)
+
+        console.print()
+        console.print(Panel(Markdown(result["answer"]), title="回答",
+                            border_style="green", padding=(1, 2)))
+        _print_citations(result["citations"])
+
+        rw = result["rewrite"]
+        timing = result["timings"]
+        console.print(f"改写 [bold]{rw['backend']}[/bold]"
+                      + ("（降级）" if rw.get("degraded") else "")
+                      + f"｜重排 [bold]{result['rerank']['backend']}[/bold]"
+                      + f"｜检索 {timing['retrieve_ms']:.0f}ms"
+                      + f"｜重排 {timing['rerank_ms']:.0f}ms"
+                      + f"｜生成 {timing['llm_ms']:.0f}ms"
+                      + f"｜总计 {timing['total_ms']:.0f}ms")
+        if len(rw["queries"]) > 1:
+            console.print(f"[dim]改写查询：{' | '.join(rw['queries'])}[/dim]")
+
+    console.print("\n[dim]对话结束。[/dim]\n")
+    return 0
+
+
+def cmd_web(host: str | None, port: int | None) -> int:
+    """启动 Web 界面"""
+    try:
+        import uvicorn
+    except ImportError:
+        console.print("[red]缺少 Web 依赖，请先执行：pip install fastapi uvicorn[/red]\n")
+        return 1
+
+    from src import config
+    from src import web as web_app
+
+    target_host = host or config.WEB_HOST
+    target_port = port or config.WEB_PORT
+    console.print(f"\nWeb 界面启动中：http://{target_host}:{target_port}\n"
+                  "[dim]（Ctrl+C 停止）[/dim]\n")
+    uvicorn.run(web_app.app, host=target_host, port=target_port, log_level="info")
+    return 0
+
+
 def _print_answer_table(answers: list[dict]) -> float:
     table = Table(title="3) 回答要点覆盖率（LLM 裁判）", show_lines=True)
     table.add_column("问题", overflow="fold", max_width=44)
@@ -312,6 +416,38 @@ def _print_answer_table(answers: list[dict]) -> float:
                       f"[{color}]{j['score']:.0%}[/{color}]")
     console.print(table)
     return sum(r["judge"]["score"] for r in answers) / len(answers)
+
+
+def cmd_multi_turn_eval() -> int:
+    """多轮改写评测：对比「不改写」与「自动改写」在追问场景下的检索质量"""
+    from src import evaluate
+    from src.config import RERANK_TOP_N
+    from src.retriever import HybridRetriever
+
+    items = evaluate.load_multi_turn_set()
+    console.print(f"\n多轮评测集：{len(items)} 条追问（每条带 1 轮上下文）\n")
+
+    retriever = HybridRetriever()
+    with console.status("正在评测查询改写效果（关闭 / 开启）..."):
+        rows = evaluate.compare_rewrite(retriever, items)
+
+    table = Table(title=f"查询改写效果（重排后 Top-{RERANK_TOP_N}，片段级）", show_lines=True)
+    table.add_column("改写后端", width=14)
+    table.add_column(f"片段 Hit@{RERANK_TOP_N}", width=12, justify="center")
+    table.add_column("片段 MRR", width=9, justify="center")
+    table.add_column("平均检索路数", width=12, justify="center")
+    table.add_column("P50 (ms)", width=9, justify="center")
+    table.add_column("P95 (ms)", width=9, justify="center")
+    table.add_column("降级", width=6, justify="center")
+    for row in rows:
+        label = "关闭" if row["rewrite_backend"] == "none" else "开启（auto）"
+        table.add_row(label, f"{row['hit_at_n']:.0%}", f"{row['mrr']:.3f}",
+                      f"{row['avg_queries']:.1f}",
+                      f"{row['latency_ms_p50']:.0f}", f"{row['latency_ms_p95']:.0f}",
+                      str(row["degraded"]))
+    console.print(table)
+    console.print("[dim]只跑检索+重排，不生成回答：改写影响的是召回，在检索层即可量化[/dim]\n")
+    return 0
 
 
 def cmd_eval(rerank_backend: str, compare: bool, skip_answers: bool) -> int:
@@ -393,6 +529,16 @@ def main() -> int:
 
     sub.add_parser("warmup", help="预下载本地模型（向量化 + Cross-Encoder 重排）")
 
+    chat_parser = sub.add_parser("chat", help="多轮对话（记忆 + 查询改写）")
+    chat_parser.add_argument("--rewrite", choices=["auto", "llm", "rule", "none"],
+                             default=None, help="查询改写后端")
+    chat_parser.add_argument("--rerank", choices=RERANK_CHOICES, default=None,
+                             help="重排后端")
+
+    web_parser = sub.add_parser("web", help="启动 Web 界面")
+    web_parser.add_argument("--host", default=None, help="监听地址")
+    web_parser.add_argument("--port", type=int, default=None, help="监听端口")
+
     ingest_parser = sub.add_parser("ingest", help="构建知识库索引")
     ingest_parser.add_argument("--backend", choices=["auto", "faiss", "numpy"],
                                help="向量索引后端（默认取 .env 的 VECTOR_BACKEND）")
@@ -414,6 +560,8 @@ def main() -> int:
                              help="对比 none / llm / cross-encoder 三种重排后端")
     eval_parser.add_argument("--skip-answers", action="store_true",
                              help="只评测检索与重排，不调用 LLM 裁判（省 token）")
+    eval_parser.add_argument("--multi-turn", action="store_true",
+                             help="改跑多轮评测集，对比查询改写开关的效果")
 
     bench_parser = sub.add_parser("bench", help="性能基准（向量后端 + 重排后端延迟）")
     bench_parser.add_argument("--repeat", type=int, default=3, help="检索延迟测试轮数")
@@ -432,12 +580,18 @@ def main() -> int:
         return cmd_bench(args.repeat, args.scale, backends)
     if args.command == "warmup":
         return cmd_warmup()
+    if args.command == "chat":
+        return cmd_chat(args.rewrite, args.rerank)
+    if args.command == "web":
+        return cmd_web(args.host, args.port)
     if args.command == "ingest":
         return cmd_ingest(args.backend, args.index_type)
     if args.command == "ask":
         backend = "none" if args.no_rerank else args.rerank
         return cmd_ask(args.question, backend)
     if args.command == "eval":
+        if args.multi_turn:
+            return cmd_multi_turn_eval()
         return cmd_eval(args.rerank or "auto", args.compare, args.skip_answers)
 
     parser.print_help()

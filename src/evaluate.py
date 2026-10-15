@@ -43,6 +43,15 @@ def load_eval_set() -> list[dict]:
     return items
 
 
+def load_multi_turn_set() -> list[dict]:
+    """读取多轮评测集（每条含 history + 追问 + 期望片段）"""
+    path = EVALS_DIR / "multi_turn_set.jsonl"
+    if not path.exists():
+        raise FileNotFoundError(f"多轮评测集不存在：{path}")
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()]
+
+
 def percentile(values: list[float], pct: float) -> float:
     """最近秩百分位数（P50 / P95）；输入为空返回 0"""
     if not values:
@@ -147,6 +156,59 @@ def compare_backends(retriever: HybridRetriever, items: list[dict],
     """对多个重排后端跑同一份评测集，输出可直接对比的指标表"""
     return [eval_rerank(retriever, items, b, top_k=top_k, top_n=top_n)
             for b in (backends or ["none", "llm", "cross-encoder"])]
+
+
+# ---------- 第二层（多轮）：查询改写效果 ----------
+
+def eval_multi_turn(retriever: HybridRetriever, items: list[dict],
+                    rewrite_backend: str, rerank_backend: str = "auto",
+                    top_n: int = RERANK_TOP_N) -> dict:
+    """评估某个改写后端在多轮追问下的检索质量（只跑检索+重排，不生成回答）
+
+    不生成回答的原因：改写影响的是「召回什么」，在检索层就能量化，
+    生成与否不影响这个判断，却能省下大量 token。
+    """
+    hits: list[float] = []
+    reciprocal_ranks: list[float] = []
+    latencies: list[float] = []
+    query_counts: list[int] = []
+    degraded = 0
+    used_backend = rewrite_backend
+
+    for item in items:
+        started = time.perf_counter()
+        _candidates, used, _stats, rewrite_info, _rerank = rag.retrieve_turn(
+            item["question"], retriever=retriever, history=item.get("history", []),
+            rewrite_backend=rewrite_backend, rerank_backend=rerank_backend)
+        latencies.append((time.perf_counter() - started) * 1000)
+
+        used_backend = rewrite_info.get("backend", rewrite_backend)
+        query_counts.append(len(rewrite_info["queries"]))
+        if rewrite_info.get("degraded"):
+            degraded += 1
+
+        rank = _expected_rank(used, item)
+        hits.append(1.0 if rank else 0.0)
+        reciprocal_ranks.append(1.0 / rank if rank else 0.0)
+
+    return {
+        "rewrite_backend": rewrite_backend,
+        "used_backend": used_backend,
+        "degraded": degraded,
+        "hit_at_n": _mean(hits),
+        "mrr": _mean(reciprocal_ranks),
+        "avg_queries": _mean([float(q) for q in query_counts]),
+        "latency_ms_p50": percentile(latencies, 50),
+        "latency_ms_p95": percentile(latencies, 95),
+        "top_n": top_n,
+    }
+
+
+def compare_rewrite(retriever: HybridRetriever, items: list[dict],
+                    rerank_backend: str = "auto") -> list[dict]:
+    """对比「不改写」与「自动改写」在多轮追问上的差异"""
+    return [eval_multi_turn(retriever, items, b, rerank_backend=rerank_backend)
+            for b in ("none", "auto")]
 
 
 # ---------- 第三层：回答质量 ----------

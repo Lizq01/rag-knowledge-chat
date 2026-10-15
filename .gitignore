@@ -19,6 +19,7 @@ index/*
 !index/.gitkeep
 outputs/*
 !outputs/.gitkeep
+data/sessions/
 
 # 本地模型缓存
 .cache/

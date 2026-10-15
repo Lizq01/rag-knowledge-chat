@@ -1,14 +1,17 @@
 # 知识库 RAG Agent
 
-把本地资料变成可对话的知识库：**混合检索（BM25 + 语义向量）→ 重排 → 带引用来源的回答 → 自动化评测**。
+把本地资料变成可对话的知识库：**混合检索（BM25 + 语义向量）→ 查询改写 → 重排 → 带引用来源的回答 → 多轮记忆 → Web 界面 → 自动化评测**。
 
 ## 核心特性
 
 - **混合检索**：BM25 关键词检索 + BGE 语义向量检索，RRF（倒数排名融合）合并两路结果
+- **查询改写**：多轮场景下自动做指代消解（「那这个 k 取多少？」→ 补全主语），并扩展多路查询变体加权融合
 - **双后端重排**：本地 Cross-Encoder（bge-reranker，ONNX 运行）或 LLM 打分，可 A/B 切换与自动降级
 - **FAISS 向量索引**：`IndexFlatIP` 精确检索 / `IndexHNSWFlat` 近似检索，装不上自动退回 NumPy
+- **多轮记忆**：短期滑动窗口（最近 N 轮原文）+ 中期 LLM 摘要压缩 + 会话落盘（重启可恢复、TTL 自动淘汰）
+- **Web 界面**：FastAPI + 单文件原生 HTML（无任何 CDN 依赖，断网可用），含并发背压
 - **引用溯源**：回答中的每段事实都标注 `[编号]`，可回查原文出处
-- **分层评测**：30 条评测集，输出召回率、片段级 MRR、回答要点覆盖率与 P50/P95 延迟
+- **分层评测**：单轮 30 条 + 多轮 15 条评测集，输出召回率、片段级 MRR、回答要点覆盖率与 P50/P95 延迟
 - **轻量本地推理**：fastembed + ONNX Runtime（无需 torch / GPU），模型首次自动下载后离线可用
 
 ## 处理链路
@@ -16,9 +19,11 @@
 ```
 离线索引：  data/docs/*  →  加载解析  →  语义切分(带重叠)  →  BGE 向量化  →  FAISS 索引 + 元信息
                                                                                 │
-在线问答：  用户提问  →  BM25 召回 ─┐                                            │
-                       向量召回  ─┼→ RRF 融合 → 重排(CE/LLM) → 生成带引用的回答  │
+在线问答：  用户提问  →  查询改写(指代消解+多路扩展) ─┐                             │
+                       BM25 召回 ─┐                  │                            │
+                       向量召回  ─┼→ RRF 融合(加权) → 重排(CE/LLM) → 带历史生成  │
                                  └──────────────────────────────────────────────┘
+多轮记忆：  会话摘要 + 最近 3 轮原文  →  生成上下文；超出阈值自动摘要压缩，落盘 data/sessions/
 ```
 
 ## 快速开始
@@ -38,19 +43,26 @@ python main.py warmup
 # 5. 放入资料（支持 .md / .txt / .pdf），构建索引
 python main.py ingest
 
-# 6. 提问
+# 6. 提问（单轮）
 python main.py ask "RRF 融合算法的公式是什么？"
 python main.py ask "RRF 的公式？" --rerank none      # 指定重排后端做对比
 
-# 7. 跑评测集 / 性能基准
-python main.py eval --compare          # 对比 none / llm / cross-encoder
+# 7. 多轮对话（CLI）：追问可以直接说「那这个 k 一般取多少？」
+python main.py chat                                    # /new 开新会话 · /history 看记忆 · /quit 退出
+
+# 8. 启动 Web 界面（默认 http://127.0.0.1:8000）
+python main.py web
+
+# 9. 跑评测集 / 性能基准
+python main.py eval --compare          # 单轮：对比 none / llm / cross-encoder 重排
+python main.py eval --multi-turn       # 多轮：对比查询改写开/关的效果
 python main.py bench                   # 向量后端与重排后端的延迟基准
 ```
 
 ## 目录结构
 
 ```
-├── main.py              # CLI 入口（--check / warmup / ingest / ask / eval / bench）
+├── main.py              # CLI 入口（--check / warmup / ingest / ask / chat / web / eval / bench）
 ├── src/
 │   ├── config.py        # 配置与路径
 │   ├── llm.py           # LLM 客户端（显式超时 + 退避重试）
@@ -58,13 +70,17 @@ python main.py bench                   # 向量后端与重排后端的延迟基
 │   ├── embedder.py      # 本地向量化（fastembed / BGE）
 │   ├── vectorstore.py   # 向量索引抽象（FAISS flat/hnsw + NumPy 兜底）
 │   ├── store.py         # 索引构建、持久化、元信息与新鲜度校验
-│   ├── retriever.py     # 混合检索（BM25 + 向量 + RRF 融合）
+│   ├── retriever.py     # 混合检索（BM25 + 向量 + RRF 融合，支持多路加权）
+│   ├── rewrite.py       # 查询改写（LLM 指代消解+扩展 / 规则拼接 / 关闭）
 │   ├── reranker.py      # 重排（Cross-Encoder / LLM / 不重排，含降级链路）
-│   ├── rag.py           # 问答主流程（生成带引用的回答）
-│   └── evaluate.py      # 评测（召回率 + 片段级 MRR + 要点覆盖率）
+│   ├── memory.py        # 多轮记忆（滑动窗口 + 摘要压缩 + 会话仓库/TTL）
+│   ├── rag.py           # 问答主流程（单轮 answer / 多轮 answer_turn）
+│   ├── web.py           # FastAPI 应用 + 单文件页面 + 并发背压
+│   └── evaluate.py      # 评测（召回率 + 片段级 MRR + 要点覆盖率 + 多轮改写对比）
 ├── data/docs/           # 知识库文档（放入你的资料）
-├── evals/eval_set.jsonl # 评测集（30 条，含片段级 ground truth）
+├── evals/               # 评测集（eval_set 30 条单轮 / multi_turn_set 15 条多轮）
 ├── index/               # 索引文件（自动生成，不提交 git）
+├── data/sessions/       # 会话持久化（自动生成，不提交 git）
 └── outputs/             # 运行产物
 ```
 
@@ -84,6 +100,12 @@ python main.py bench                   # 向量后端与重排后端的延迟基
 
 **评测驱动**：`evals/eval_set.jsonl` 保存「问题 - 期望文档 - 答案片段特征文本 - 要点」四元组。任何参数调整（切分长度、top_k、重排后端）都可通过 `python main.py eval --compare` 量化验证。
 
+**为什么要查询改写**：多轮对话里用户的追问充满指代与省略（「那这个 k 取多少？」——BM25 与向量检索都不知道「k」指 RRF 里的平滑常数）。改写分两步：LLM 把上一轮上下文带进来做指代消解，同时生成 2 个语义变体；多路查询各自跑混合检索，结果做**加权 RRF** 融合（原始问题权重 1.0，改写变体 0.7——变体只是扩展视角，不能喧宾夺主）。首轮没有上下文，默认不改写（省一次 LLM 调用）。
+
+**为什么记忆分三层**：最近 3 轮保留原文（多轮正确性高度依赖最近几轮，原文最可靠）；更早的轮次压成不超过 300 字的摘要（避免上下文随对话长度线性膨胀）；整段对话落盘 JSON（进程重启后可恢复）。**压缩触发有两个条件**：字符数超阈值，或轮数逼近硬上限——少了后者，短答案的长对话会永远走不到摘要，直接被静默截断（这是开发中实测踩到的坑）。压缩失败降级为「丢弃较早轮次」而不是报错：少记几轮历史不会让问答失败，抛异常会。
+
+**为什么 Web 要做并发背压**：检索+重排是 CPU 密集活。实测并发 7 个请求时：信号量上限 4 个正常返回（200），3 个快速失败 503「服务繁忙」——同时 4 个重排在 32 核机器上互相抢核，单请求延迟从 5.6s 涨到 13.5s。结论：与其让请求排队把机器拖垮，不如快速失败让前端重试。
+
 ## 语料与评测集
 
 `data/docs/` 现有 5 篇笔记：原始 2 篇（`ai-agent-notes.md` / `rag-notes.md`）加 3 篇**干扰文档**（`vector-db-notes.md` / `prompt-engineering-notes.md` / `llm-finetune-notes.md`）。
@@ -98,6 +120,16 @@ python main.py bench                   # 向量后端与重排后端的延迟基
 | 改写/跨文档型 | 8 | 换说法提问（如「两路检索结果要合并成一个排序，有没有不用调分数尺度的办法？」），考察语义检索与抗干扰 |
 
 每条包含 `expected_text`（答案所在片段的一段特征文本）。**判定用片段级而非文档级**：一篇文档有 4~5 个片段，文档级命中几乎总是 100%，无法反映「排在最前面的是不是真正包含答案的那一段」。
+
+多轮评测集 `evals/multi_turn_set.jsonl`（15 条）在单轮格式上多了 `history` 字段（1 轮真实问答上下文），追问全部带指代或省略：
+
+| 追问类型 | 示例 | 条数 |
+|---|---|---|
+| 代词指代 | 「那这个 k 一般取多少？」（k 指 RRF 平滑常数） | 8 |
+| 省略主语 | 「短期记忆呢？它俩有什么区别？」 | 5 |
+| 反向提问 | 「反过来，什么情况下该选微调？」 | 2 |
+
+这类问题**不改写时检索必然偏**——「这个 k」「它俩」对 BM25 和向量检索都是无意义的高频词。评测跑法：`python main.py eval --multi-turn`（自动对比改写开/关两组，只测检索与重排，不耗生成 token）。
 
 ## 实测基线（2026-10-15，Windows 11 / Python 3.13 / 32 核 CPU / 无 GPU）
 
@@ -142,6 +174,21 @@ python main.py bench                   # 向量后端与重排后端的延迟基
 - 调小 `RERANK_MAX_CHARS`（如 300）可把重排耗时降到约 2 秒，代价是长片段尾部不参与打分；
 - 离线批处理场景保持默认（质量优先）。
 
+**多轮改写收益（evals/multi_turn_set.jsonl，15 条带上下文的追问）**
+
+| 配置 | 片段 Hit@5 | 片段 MRR | 平均查询路数 | P50 | P95 |
+|---|---|---|---|---|---|
+| 改写关闭（none） | 93% | 0.856 | 1.0 | 3779 ms | 4934 ms |
+| 改写开启（auto，LLM） | **100%** | **0.889** | 3.0 | 4578 ms | 5849 ms |
+
+结论：改写把 7 条指代/省略型追问全部救回（Hit@5 93%→100%），代价是每次多一路 LLM 调用（约 800ms）与 3 倍检索量（检索本身只占几十 ms，可忽略）。**追问占比高的对话场景收益明显；单轮问答完全不受影响**（首轮默认不改写）。
+
+端到端 HTTP 冒烟（Web 界面，同一会话连续三轮）：
+- 第 1 轮「RRF 融合算法的公式是什么？」→ 正确给出公式，`改写=none`（首轮不改写）；
+- 第 2 轮「那这个 k 一般取多少？」→ 正确答出 k=60，改写查询为 `RRF（倒数排名融合）算法中的平滑常数 k 一般取多少？` 等三路；
+- 第 3 轮「它和加权求和比有什么优势？」→ 正确把「它」消解为 RRF，并如实回答知识库中没有直接对比信息（不编造）；
+- 并发背压：7 个并发请求 → 4 个 200 + 3 个 503；4 路并发时单请求 P50 从 5.6s 涨到 13.5s（CPU 抢核，重排是瓶颈）。
+
 ## 配置说明（.env）
 
 | 变量 | 默认 | 说明 |
@@ -153,6 +200,15 @@ python main.py bench                   # 向量后端与重排后端的延迟基
 | `RERANK_MODEL` | `BAAI/bge-reranker-v2-m3-int8` | fastembed 内置的 ONNX 重排模型 |
 | `RERANK_MAX_CHARS` | 1500 | 单片段送入重排模型的最大字符数 |
 | `RERANK_THREADS` | 0（自动） | ONNX 线程数；32 核机器上显式 16 线程比默认快约 23% |
+| `REWRITE_BACKEND` | `auto` | `auto` LLM→规则降级 / `llm` / `rule` / `none` |
+| `REWRITE_COUNT` | 3 | 每问生成「原始+变体」共几路查询 |
+| `REWRITE_ON_FIRST_TURN` | 0 | 首轮（无上下文）是否也改写，默认关 |
+| `MEMORY_TURNS` | 3 | 短期窗口：最近 N 轮保留原文 |
+| `MEMORY_SUMMARY_CHARS` | 3000 | 历史字符数超此值触发 LLM 摘要压缩 |
+| `MEMORY_MAX_TURNS` | 30 | 轮数硬上限（含摘要兜底触发线） |
+| `SESSION_MAX_ACTIVE` / `SESSION_TTL_MINUTES` | 50 / 120 | 服务端会话数量上限与空闲过期时间 |
+| `MAX_QUESTION_CHARS` | 500 | 单个问题的长度上限（Web 入口校验） |
+| `WEB_HOST` / `WEB_PORT` | 127.0.0.1 / 8000 | Web 服务监听地址与端口 |
 | `LLM_TIMEOUT` / `LLM_MAX_RETRIES` | 60 / 2 | LLM 调用超时与重试（指数退避 + 抖动） |
 
 ## 降级与容错
@@ -163,6 +219,10 @@ python main.py bench                   # 向量后端与重排后端的延迟基
 | FAISS 索引文件损坏 | 报错并提示删除 `index/faiss.index` 重建 | 明确失败，不静默错结果 |
 | Cross-Encoder 模型加载失败 | 降级 LLM 重排 | 返回值标记 `degraded_from`，评测统计降级次数 |
 | LLM 重排输出不可解析 | 按召回序截断 | 返回 `backend=none` |
+| LLM 改写调用失败 | 降级规则改写（拼上一轮问题） | 返回 `degraded_from`，前端显示降级提示 |
+| LLM 摘要压缩失败 | 降级丢弃较早轮次 | 返回 `backend=drop`，主流程不中断 |
+| 会话文件损坏 | 按新会话处理 | 打 warning，不拒绝服务 |
+| 并发超过信号量上限 | 快速返回 503 | 前端提示稍后重试，不排队拖垮机器 |
 | 索引与 chunk 数量不一致 | 报错要求重新 ingest | 防止用坏索引回答问题 |
 | 文档变更后未重建索引 | 告警提示 | `--check` 输出「建议重新 ingest」 |
 
@@ -170,4 +230,4 @@ python main.py bench                   # 向量后端与重排后端的延迟基
 
 - [x] M1 混合检索 + LLM 重排 + 引用溯源 + 基础评测
 - [x] M2 FAISS 向量索引（flat/hnsw 可切换 + NumPy 兜底）、本地 Cross-Encoder 重排、片段级评测与性能基准
-- [ ] M3 查询改写（Query Rewriting）、多轮对话记忆、Web 界面
+- [x] M3 查询改写（指代消解 + 多路扩展 + 加权 RRF）、多轮记忆（窗口 + 摘要 + 会话持久化）、Web 界面（FastAPI + 背压）、多轮评测
