@@ -6,10 +6,15 @@
 - 两者互补。RRF（Reciprocal Rank Fusion）按「排名倒数」融合两路结果：
       score(d) = Σ 1 / (k + rank_i(d))     （k 取标准值 60）
   只依赖排名、不依赖分数尺度，无需调参，工业界常用且效果稳定。
+
+向量检索的底层实现由 vectorstore 决定（FAISS 或 NumPy），本模块不感知具体后端。
 """
+import time
+
 import numpy as np
 
 from . import embedder, store
+from .vectorstore import VectorIndex
 
 RRF_K = 60
 
@@ -18,7 +23,16 @@ class HybridRetriever:
     """加载索引后的统一检索入口"""
 
     def __init__(self):
-        self.chunks, self.vectors, self.bm25 = store.load_index()
+        self.chunks, self.vector_index, self.bm25 = store.load_index()
+
+    @property
+    def backend(self) -> str:
+        """当前向量检索后端（faiss:flat / faiss:hnsw / numpy）"""
+        return self.vector_index.backend
+
+    @property
+    def vector_index_obj(self) -> VectorIndex:
+        return self.vector_index
 
     # ---------- 单路检索 ----------
 
@@ -29,17 +43,40 @@ class HybridRetriever:
 
     def search_vector(self, query: str, top_k: int) -> list[tuple[int, float]]:
         query_vec = embedder.embed_query(query)
-        sims = self.vectors @ query_vec  # 向量已归一化：内积 = 余弦相似度
-        order = np.argsort(sims)[::-1][:top_k]
-        return [(int(i), float(sims[i])) for i in order]
+        return self.vector_index.search(query_vec, top_k)
 
     # ---------- 融合检索 ----------
 
+    def search_with_stats(self, query: str, top_k: int = 10) -> tuple[list[dict], dict]:
+        """混合检索，额外返回各阶段耗时（毫秒），用于可观测性与性能回归"""
+        stats: dict[str, float] = {}
+
+        started = time.perf_counter()
+        query_vec = embedder.embed_query(query)
+        stats["embed_ms"] = (time.perf_counter() - started) * 1000
+
+        started = time.perf_counter()
+        bm25_hits = self.search_bm25(query, top_k)
+        stats["bm25_ms"] = (time.perf_counter() - started) * 1000
+
+        started = time.perf_counter()
+        vector_hits = self.vector_index.search(query_vec, top_k)
+        stats["vector_ms"] = (time.perf_counter() - started) * 1000
+
+        started = time.perf_counter()
+        results = self._fuse(bm25_hits, vector_hits, top_k)
+        stats["fuse_ms"] = (time.perf_counter() - started) * 1000
+        stats["retrieve_ms"] = stats["embed_ms"] + stats["bm25_ms"] + stats["vector_ms"] + stats["fuse_ms"]
+        return results, stats
+
     def search(self, query: str, top_k: int = 10) -> list[dict]:
         """混合检索：返回带 RRF 融合分数的 chunk 列表（按相关性降序）"""
-        bm25_hits = self.search_bm25(query, top_k)
-        vector_hits = self.search_vector(query, top_k)
+        results, _ = self.search_with_stats(query, top_k)
+        return results
 
+    def _fuse(self, bm25_hits: list[tuple[int, float]],
+              vector_hits: list[tuple[int, float]], top_k: int) -> list[dict]:
+        """RRF 融合：只利用两路排名，规避稀疏/稠密分数尺度不一致的问题"""
         fused: dict[int, float] = {}
         for hits in (bm25_hits, vector_hits):
             for rank, (idx, _score) in enumerate(hits):

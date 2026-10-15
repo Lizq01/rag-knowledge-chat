@@ -19,6 +19,13 @@ def _load_model():
     return _model
 
 
+def model_name() -> str:
+    """当前使用的向量化模型名（用于日志与索引元信息）"""
+    from . import config
+
+    return config.EMBEDDING_MODEL
+
+
 def embed_texts(texts: list[str]) -> np.ndarray:
     """文本列表 → 归一化向量矩阵 (N, D)。归一化后内积即为余弦相似度"""
     model = _load_model()

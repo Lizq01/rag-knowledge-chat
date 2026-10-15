@@ -1,8 +1,30 @@
-{"question": "ReAct 框架的核心思想是什么？", "expected_doc": "ai-agent-notes.md", "key_points": ["推理与行动交替进行", "思考、行动、观察的循环结构", "可解释性强，便于定位问题"]}
-{"question": "Agent 的长期记忆一般用什么方案实现？", "expected_doc": "ai-agent-notes.md", "key_points": ["外部存储方案", "向量数据库", "通过语义检索召回相关内容"]}
-{"question": "多智能体协作中常见的做法有哪些？", "expected_doc": "ai-agent-notes.md", "key_points": ["角色分工、职责隔离", "并行处理子任务", "互相评审"]}
-{"question": "MCP 协议的作用是什么？", "expected_doc": "ai-agent-notes.md", "key_points": ["统一模型与外部工具的接入方式", "一次实现到处接入", "Anthropic 推出的开放协议"]}
-{"question": "RRF 融合算法的公式是什么？k 一般取值多少？", "expected_doc": "rag-notes.md", "key_points": ["score = 求和 1/(k+rank)", "k 通常取 60", "只使用排名不使用原始分数"]}
-{"question": "文本切分时设置重叠区间的作用是什么？", "expected_doc": "rag-notes.md", "key_points": ["避免关键信息被切断", "保证上下文连续性", "一般 50 到 100 字符"]}
-{"question": "RAG 为什么需要重排这一步？重排常用什么模型？", "expected_doc": "rag-notes.md", "key_points": ["召回追求不漏、重排追求精准", "Cross-Encoder 模型", "精度高于双塔模型但更慢"]}
-{"question": "RAG 的忠实度（Faithfulness）指标衡量什么？", "expected_doc": "rag-notes.md", "key_points": ["回答是否完全基于检索内容", "检查有没有编造", "属于生成层评测指标"]}
+{"question": "ReAct 框架的核心思想是什么？", "expected_doc": "ai-agent-notes.md", "expected_text": "让推理（Reasoning）与行动（Acting）交替进行", "key_points": ["推理与行动交替进行", "思考、行动、观察的循环结构", "可解释性强，便于定位问题"]}
+{"question": "Agent 的长期记忆一般用什么方案实现？", "expected_doc": "ai-agent-notes.md", "expected_text": "长期记忆一般采用外部存储方案", "key_points": ["外部存储方案", "向量数据库", "通过语义检索召回相关内容"]}
+{"question": "多智能体协作中常见的做法有哪些？", "expected_doc": "ai-agent-notes.md", "expected_text": "每个 Agent 负责一个专门角色", "key_points": ["角色分工、职责隔离", "并行处理子任务", "互相评审"]}
+{"question": "MCP 协议的作用是什么？", "expected_doc": "ai-agent-notes.md", "expected_text": "统一模型与外部工具、数据源之间的接入方式", "key_points": ["统一模型与外部工具的接入方式", "一次实现到处接入", "Anthropic 推出的开放协议"]}
+{"question": "RRF 融合算法的公式是什么？k 一般取值多少？", "expected_doc": "rag-notes.md", "expected_text": "k 是平滑常数，通常取 60", "key_points": ["score = 求和 1/(k+rank)", "k 通常取 60", "只使用排名不使用原始分数"]}
+{"question": "文本切分时设置重叠区间的作用是什么？", "expected_doc": "rag-notes.md", "expected_text": "避免关键信息恰好落在边界处被切断", "key_points": ["避免关键信息被切断", "保证上下文连续性", "一般 50 到 100 字符"]}
+{"question": "RAG 为什么需要重排这一步？重排常用什么模型？", "expected_doc": "rag-notes.md", "expected_text": "检索阶段（召回）追求「不漏」", "key_points": ["召回追求不漏、重排追求精准", "Cross-Encoder 模型", "精度高于双塔模型但更慢"]}
+{"question": "RAG 的忠实度（Faithfulness）指标衡量什么？", "expected_doc": "rag-notes.md", "expected_text": "忠实度（Faithfulness，回答是否完全基于检索到的内容、没有编造）", "key_points": ["回答是否完全基于检索内容", "检查有没有编造", "属于生成层评测指标"]}
+{"question": "Agent 和传统程序的核心区别是什么？", "expected_doc": "ai-agent-notes.md", "expected_text": "Agent 的行为不是由固定流程写死的", "key_points": ["行为不是由固定流程写死的", "由模型根据当前状态动态决定", "带来灵活性也带来不确定性"]}
+{"question": "一个完整的 Agent 系统通常包含哪四个部分？", "expected_doc": "ai-agent-notes.md", "expected_text": "一个完整的 Agent 系统通常包含四个部分", "key_points": ["规划", "记忆", "工具", "执行循环"]}
+{"question": "Plan-and-Execute 模式相比 ReAct 有什么优缺点？", "expected_doc": "ai-agent-notes.md", "expected_text": "它对长任务的全局把控更好", "key_points": ["对长任务的全局把控更好", "计划制定后较难根据新信息调整", "实践中常与 ReAct 混合使用"]}
+{"question": "什么是 Function Calling？", "expected_doc": "ai-agent-notes.md", "expected_text": "以结构化的方式声明工具的名称、参数与用途", "key_points": ["结构化声明工具的名称、参数与用途", "模型在需要时生成调用请求", "让模型突破只会生成文本的限制"]}
+{"question": "多智能体系统一般设置几个角色比较合适？为什么不是越多越好？", "expected_doc": "ai-agent-notes.md", "expected_text": "通常 3～5 个角色足以覆盖大多数复杂任务", "key_points": ["3 到 5 个角色足以覆盖大多数复杂任务", "通信开销上升", "协调复杂度上升"]}
+{"question": "Agent 工程化中为什么要做上下文压缩？", "expected_doc": "ai-agent-notes.md", "expected_text": "多步任务会迅速撑爆上下文窗口", "key_points": ["多步任务会迅速撑爆上下文窗口", "需要摘要压缩", "按需检索等策略"]}
+{"question": "Agent 的短期记忆和长期记忆分别指什么？", "expected_doc": "ai-agent-notes.md", "expected_text": "短期记忆指当前上下文窗口内的对话和中间结果", "key_points": ["短期记忆是上下文窗口内的对话和中间结果", "长期记忆用外部存储", "长期记忆通过语义检索召回"]}
+{"question": "RAG 主要解决大模型的哪两个固有问题？", "expected_doc": "rag-notes.md", "expected_text": "一是知识截止", "key_points": ["知识截止", "幻觉", "由 Lewis 等人在 2020 年提出"]}
+{"question": "RAG 的索引阶段包含哪些步骤？", "expected_doc": "rag-notes.md", "expected_text": "文档加载 → 文本切分 → 向量化（Embedding）→ 存入向量库", "key_points": ["文档加载", "文本切分", "向量化", "存入向量库"]}
+{"question": "常见的文本切分策略有哪些？", "expected_doc": "rag-notes.md", "expected_text": "固定长度切分", "key_points": ["固定长度切分", "重叠切分", "语义切分"]}
+{"question": "为什么单一检索方式不够，需要混合检索？", "expected_doc": "rag-notes.md", "expected_text": "BM25 这类关键词检索擅长精确匹配", "key_points": ["BM25 擅长精确匹配但不懂同义改写", "向量检索懂语义但对精确术语不敏感", "两者互补"]}
+{"question": "常见的向量数据库有哪些，分别适合什么场景？", "expected_doc": "rag-notes.md", "expected_text": "FAISS（本地库，适合中小规模）", "key_points": ["FAISS 本地库适合中小规模", "Chroma 轻量嵌入式", "Milvus 或 Qdrant 服务化适合生产规模"]}
+{"question": "小规模场景下可以怎么做向量检索？", "expected_doc": "rag-notes.md", "expected_text": "直接用 NumPy 做余弦相似度计算", "key_points": ["直接用 NumPy 做余弦相似度计算", "无需引入额外组件"]}
+{"question": "检索层常用的评测指标有哪些？", "expected_doc": "rag-notes.md", "expected_text": "MRR（期望文档排名的倒数均值）", "key_points": ["Recall@K 衡量期望文档是否出现在前 K 条", "MRR 是期望文档排名的倒数均值"]}
+{"question": "两路检索结果要合并成一个排序，有没有不用调分数尺度的办法？", "expected_doc": "rag-notes.md", "expected_text": "融合两路结果最常用的算法是 RRF", "key_points": ["用 RRF 倒数排名融合", "只用排名不用原始分数", "鲁棒、几乎不用调参"]}
+{"question": "想让模型稳定输出 JSON，提示词上应该怎么做？", "expected_doc": "prompt-engineering-notes.md", "expected_text": "明确要求 JSON / Markdown 表格等结构化格式", "key_points": ["显式要求 JSON 等结构化格式", "在提示中给出 schema 样例", "比调 temperature 更重要"]}
+{"question": "为什么改完提示词一定要在固定样例集上重跑一遍？", "expected_doc": "prompt-engineering-notes.md", "expected_text": "改提示词一定要在固定样例集上跑一遍", "key_points": ["否则「感觉变好了」往往是错觉", "需要回归验证", "固定样例集"]}
+{"question": "基于图的那类向量索引里，哪两个参数最影响效果和速度？", "expected_doc": "vector-db-notes.md", "expected_text": "efSearch（查询期搜索宽度", "key_points": ["M 是每个节点的连接数，影响图质量与内存", "efSearch 是查询期搜索宽度", "直接决定召回率与延迟"]}
+{"question": "什么时候不该做微调，而应该走检索增强的路线？", "expected_doc": "llm-finetune-notes.md", "expected_text": "知识更新频率高", "key_points": ["知识更新频率高时检索增强更合适", "要求可溯源时选检索增强", "微调解决的是不会做某类事，而不是不知道某件事"]}
+{"question": "只有单卡也想微调比较大的模型，靠的是什么技术？", "expected_doc": "llm-finetune-notes.md", "expected_text": "QLoRA 叠加 4bit 量化后，单卡就能微调较大的模型", "key_points": ["LoRA 只训练低秩适配矩阵", "QLoRA 叠加 4bit 量化", "适配权重只有几十 MB"]}
+{"question": "近似索引上线前，怎么确认没有把召回率搞坏？", "expected_doc": "vector-db-notes.md", "expected_text": "都应该用 Flat 在真实查询集上算一次召回率作为验收线", "key_points": ["用 Flat 精确检索做基线", "在真实查询集上算召回率", "作为上线验收线"]}
+{"question": "微调完只测任务指标就上线，会有什么风险？", "expected_doc": "llm-finetune-notes.md", "expected_text": "只盯着任务指标上线，很容易得到一个「专精一项、其余全崩」的模型", "key_points": ["通用能力可能退化", "缺少对抗样例验证", "需要覆盖越权、提示注入、超长输入"]}
