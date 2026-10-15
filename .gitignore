@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 虚拟环境
+.venv/
+venv/
+
+# 环境变量（千万不要提交你的 Key！）
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# 索引与运行产物
+index/*
+!index/.gitkeep
+outputs/*
+!outputs/.gitkeep
+
+# 本地模型缓存
+.cache/
+models/
