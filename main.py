@@ -40,6 +40,7 @@ OPTIONAL_PACKAGES = [
     ("faiss", "向量索引（FAISS，缺失时自动退回 NumPy）"),
     ("fastapi", "Web 服务（python main.py web 需要）"),
     ("uvicorn", "Web 服务（python main.py web 需要）"),
+    ("mcp", "MCP 服务端（python -m mcp_server 需要）"),
 ]
 
 RERANK_CHOICES = ["auto", "cross-encoder", "llm", "none"]
@@ -99,7 +100,7 @@ def cmd_check() -> int:
         console.print("            可设置 RERANK_BACKEND=llm 改用大模型重排")
 
     console.print("\n[bold]4) 数据与索引[/bold]")
-    from src import ingest, store
+    from src.modules import ingest, store
     docs = ingest.load_documents() if config.DATA_DIR.exists() else []
     console.print(f"   文档数量：{len(docs)} 篇"
                   + ("（把 .md / .txt / .pdf 放进 data/docs/）" if not docs else ""))
@@ -123,8 +124,8 @@ def cmd_check() -> int:
 
 def cmd_warmup() -> int:
     """预下载本地模型，避免首次提问时长时间等待"""
-    from src import embedder
-    from src.reranker import preload_cross_encoder
+    from src.modules import embedder
+    from src.modules.reranker import preload_cross_encoder
 
     console.print("\n[bold]1) 向量化模型[/bold]")
     started = time.perf_counter()
@@ -145,7 +146,7 @@ def cmd_warmup() -> int:
 
 def cmd_ingest(backend: str | None, index_type: str | None) -> int:
     """构建索引"""
-    from src import store
+    from src.modules import store
     with console.status("正在扫描文档并构建索引（首次运行会下载向量模型）..."):
         stats = store.build_index(backend=backend, index_type=index_type)
     console.print(f"\n[green bold]索引构建完成[/green bold]"
@@ -158,7 +159,7 @@ def cmd_ingest(backend: str | None, index_type: str | None) -> int:
 
 def cmd_ask(question: str, rerank_backend: str) -> int:
     """提问"""
-    from src import rag
+    from src.services import rag
     with console.status("检索并生成回答中..."):
         result = rag.answer(question, rerank_backend=rerank_backend)
 
@@ -194,10 +195,11 @@ def cmd_bench(repeat: int, scale: int, rerank_backends: list[str]) -> int:
     """
     import numpy as np
 
-    from src import embedder, evaluate, store
+    from src.modules import embedder, store
+    from src.services import evaluate
     from src.config import INDEX_DIR, TOP_K
-    from src.retriever import HybridRetriever
-    from src.vectorstore import FaissIndex, NumpyIndex, faiss_available
+    from src.modules.retriever import HybridRetriever
+    from src.modules.vectorstore import FaissIndex, NumpyIndex, faiss_available
 
     retriever = HybridRetriever()
     chunks = retriever.chunks
@@ -313,9 +315,10 @@ def _print_citations(citations: list[dict]) -> None:
 
 def cmd_chat(rewrite_backend: str | None, rerank_backend: str | None) -> int:
     """多轮对话（会话记忆 + 查询改写）"""
-    from src import config, rag
-    from src.memory import SessionStore
-    from src.retriever import HybridRetriever
+    from src import config
+    from src.services import rag
+    from src.modules.memory import SessionStore
+    from src.modules.retriever import HybridRetriever
 
     try:
         retriever = HybridRetriever()
@@ -393,7 +396,7 @@ def cmd_web(host: str | None, port: int | None) -> int:
         return 1
 
     from src import config
-    from src import web as web_app
+    from src.services import web as web_app
 
     target_host = host or config.WEB_HOST
     target_port = port or config.WEB_PORT
@@ -420,9 +423,9 @@ def _print_answer_table(answers: list[dict]) -> float:
 
 def cmd_multi_turn_eval() -> int:
     """多轮改写评测：对比「不改写」与「自动改写」在追问场景下的检索质量"""
-    from src import evaluate
+    from src.services import evaluate
     from src.config import RERANK_TOP_N
-    from src.retriever import HybridRetriever
+    from src.modules.retriever import HybridRetriever
 
     items = evaluate.load_multi_turn_set()
     console.print(f"\n多轮评测集：{len(items)} 条追问（每条带 1 轮上下文）\n")
@@ -452,9 +455,9 @@ def cmd_multi_turn_eval() -> int:
 
 def cmd_eval(rerank_backend: str, compare: bool, skip_answers: bool) -> int:
     """运行评测集"""
-    from src import evaluate
+    from src.services import evaluate
     from src.config import RERANK_TOP_N, TOP_K
-    from src.retriever import HybridRetriever
+    from src.modules.retriever import HybridRetriever
 
     items = evaluate.load_eval_set()
     console.print(f"\n评测集：{len(items)} 条问题\n")

@@ -12,7 +12,7 @@ def _load_model():
     """惰性加载向量化模型（首次加载约 1~2 秒）"""
     global _model
     if _model is None:
-        from . import config  # noqa: F401 —— 确保加载前 HF_ENDPOINT 等环境变量已就绪
+        from .. import config  # noqa: F401 —— 确保加载前 HF_ENDPOINT 等环境变量已就绪
         from fastembed import TextEmbedding
 
         _model = TextEmbedding(config.EMBEDDING_MODEL)
@@ -21,7 +21,7 @@ def _load_model():
 
 def model_name() -> str:
     """当前使用的向量化模型名（用于日志与索引元信息）"""
-    from . import config
+    from .. import config
 
     return config.EMBEDDING_MODEL
 

@@ -5,7 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # ---------- 路径 ----------
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]  # src/config/settings.py → 项目根目录
 DATA_DIR = PROJECT_ROOT / "data" / "docs"
 INDEX_DIR = PROJECT_ROOT / "index"
 EVALS_DIR = PROJECT_ROOT / "evals"

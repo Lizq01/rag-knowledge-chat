@@ -9,7 +9,7 @@
 import re
 from pathlib import Path
 
-from .config import CHUNK_OVERLAP, CHUNK_SIZE, DATA_DIR
+from ..config import CHUNK_OVERLAP, CHUNK_SIZE, DATA_DIR
 
 SUPPORTED_SUFFIXES = {".md", ".txt", ".pdf"}
 

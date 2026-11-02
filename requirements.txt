@@ -23,3 +23,7 @@ pypdf>=4.0
 # 已在 Python 3.13 上实测：fastapi 0.143 / uvicorn 0.54 / pydantic 2.14
 fastapi>=0.115
 uvicorn>=0.30
+
+# ===== MCP 服务端（M4）=====
+# mcp 2.x：FastMCP 已并入 mcp.server.mcpserver（MCPServer），1.x 的 mcp.server.fastmcp 会直接报错
+mcp>=2.0

@@ -22,8 +22,9 @@ import jieba
 import numpy as np
 from rank_bm25 import BM25Okapi
 
-from . import config, embedder, ingest
-from .config import CHUNK_OVERLAP, CHUNK_SIZE, DATA_DIR, EMBEDDING_MODEL, INDEX_DIR
+from .. import config
+from . import embedder, ingest
+from ..config import CHUNK_OVERLAP, CHUNK_SIZE, DATA_DIR, EMBEDDING_MODEL, INDEX_DIR
 from .vectorstore import FaissIndex, NumpyIndex, VectorIndex, build_vector_index
 
 CHUNKS_FILE = "chunks.json"

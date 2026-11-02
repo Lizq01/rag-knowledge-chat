@@ -17,7 +17,8 @@ import json
 import logging
 import re
 
-from . import config, llm
+from .. import config
+from . import llm
 
 logger = logging.getLogger(__name__)
 

@@ -10,6 +10,7 @@
 - **FAISS 向量索引**：`IndexFlatIP` 精确检索 / `IndexHNSWFlat` 近似检索，装不上自动退回 NumPy
 - **多轮记忆**：短期滑动窗口（最近 N 轮原文）+ 中期 LLM 摘要压缩 + 会话落盘（重启可恢复、TTL 自动淘汰）
 - **Web 界面**：FastAPI + 单文件原生 HTML（无任何 CDN 依赖，断网可用），含并发背压
+- **MCP 服务端**：检索层封装为 `search_knowledge` / `get_chunk` / `list_sources` 三个 MCP 工具（stdio，严格 JSON Schema + 凭据隔离），可被任意 MCP Client 复用
 - **引用溯源**：回答中的每段事实都标注 `[编号]`，可回查原文出处
 - **分层评测**：单轮 30 条 + 多轮 15 条评测集，输出召回率、片段级 MRR、回答要点覆盖率与 P50/P95 延迟
 - **轻量本地推理**：fastembed + ONNX Runtime（无需 torch / GPU），模型首次自动下载后离线可用
@@ -59,24 +60,121 @@ python main.py eval --multi-turn       # 多轮：对比查询改写开/关的�
 python main.py bench                   # 向量后端与重排后端的延迟基准
 ```
 
+## MCP 服务端（把检索能力交给其他 Agent）
+
+MCP（Model Context Protocol）已是智能体工具层的事实标准：Server 用 JSON Schema 声明「有哪些工具、参数什么形状」，
+Client 在运行时发现并调用。本项目把检索层原样封成一个 stdio MCP Server，`deep-research-agent` 作为 Client 在 LangGraph 节点里调用它。
+
+```bash
+python -m mcp_server            # 启动服务端（通常由 Client 拉起；手动跑会停在等待 stdin）
+python -m mcp_server.selfcheck  # 端到端自检：24 项（工具发现 / 正常调用 / 非法参数 / 凭据隔离）
+
+# 官方 inspector（Web UI）：tools 页能看到 3 个工具与完整 Schema，可手工填参数调用
+npx @modelcontextprotocol/inspector ./.venv/Scripts/python.exe -m mcp_server
+# 无界面时用 CLI 模式，直接打印 tools/list
+npx @modelcontextprotocol/inspector --cli ./.venv/Scripts/python.exe -m mcp_server --method tools/list
+```
+
+### 三个工具
+
+| 工具 | 必填 | 参数与约束 | 用途 |
+|---|---|---|---|
+| `search_knowledge` | `query` | `query` 2~200 字；`top_k` 1~20（默认 5）；`mode` ∈ `hybrid`/`bm25`/`vector`；`rerank` ∈ `none`/`cross-encoder` | 混合检索，返回带 `chunk_id` 的片段 |
+| `get_chunk` | `chunk_id` | 匹配 `^[^#\s]{1,180}\.(md|txt|pdf)::\d{1,4}$` | 取回完整片段，附前后相邻 id |
+| `list_sources` | — | 无参数 | 文档清单、规模与索引信息 |
+
+约束不是注释，是**契约**：`tools/list` 下发的 `inputSchema` 带 `required` / `enum` / `minimum` / `maximum` / `pattern`，
+服务端在进业务代码之前就用 pydantic 校验。传 `top_k=999` 不会进入检索函数：
+
+```
+Error executing tool search_knowledge: 1 validation error for search_knowledgeArguments
+top_k
+  Input should be less than or equal to 20 [type=less_than_equal, input_value=999]
+```
+
+`MCPServer` 走的是 MCP 的「工具执行错误」通道（`isError=true` 的结果，不是连接层异常），
+模型能读到具体哪个字段不合法并自行改正——这正是把 Schema 当契约、而不是当提示的价值。
+
+### 凭据边界
+
+- **服务端自己读 `.env`**：LLM Key、模型路径都在服务端进程；工具签名里没有任何 token / 路径参数；
+- **stdio 白名单**：Client 只传进程启动必需的环境变量（SDK 的 `DEFAULT_INHERITED_ENV_VARS` 同理），
+  Client 进程里的 `OPENAI_API_KEY` 不会进入服务端进程，`selfcheck` 会断言这一条；
+- **出口过滤**：工具只回文档名与片段，不回磁盘路径；异常信息统一过 `scrub()`，把环境变量里的敏感值替换成 `***`；
+- **日志分流**：stdout 是 JSON-RPC 通道，日志一律走 stderr（`MCP_LOG_LEVEL` 控制级别）。
+
+### MCP 与传统 Function Calling 的差别
+
+| 维度 | 传统 Function Calling | MCP |
+|---|---|---|
+| 工具定义从哪来 | 写死在应用代码里，编进 prompt | Server 运行时声明，Client `tools/list` 动态发现 |
+| 谁维护 | 每个应用各写一份 | 一个 Server，N 个 Client 复用 |
+| 参数契约 | Schema 只是提示，模型传错就是运行时错误 | 同一份 Schema 也是校验规则，服务端先拒 |
+| 边界 | 工具在进程内，直接碰应用状态与密钥 | 进程/网络边界，凭据留在 Server 端 |
+| 换框架 | 适配层重写 | 协议不变，换 Client 即可 |
+
+一句话：Function Calling 解决「模型怎么表达要调工具」，MCP 解决「工具怎么被发布、发现和复用」。
+两者不冲突——本项目的模型仍然用 function calling 决定调哪个工具，只是工具定义来自 MCP Server 而非硬编码。
+
+### stdio 与 HTTP + SSE 怎么选
+
+| | stdio | HTTP + SSE / Streamable HTTP |
+|---|---|---|
+| 谁启动 | Client 拉起子进程 | Server 独立部署 |
+| 鉴权 | 靠进程边界，天然单租户 | 需要 token / OAuth，支持多租户 |
+| 部署 | 与 Client 同机，零网络配置 | 可远程、可共享给多个 Client |
+| 典型坑 | ① 服务端 `print()` 污染 stdout，JSON-RPC 帧错乱；② 子进程残留（必须显式关会话）；③ 跨任务关闭 anyio cancel scope 会抛 `Attempted to exit cancel scope in a different task`；④ 冷启动（加载索引/模型）压在首次调用上 | ① 长连接被中间层掐断，需心跳与重连；② 无状态代理下 session id 丢失；③ CORS 与鉴权要自己做；④ 多实例时不能把会话状态放进程内存 |
+
+本项目的选择是 **stdio**：同机、单用户、服务端依赖重（FAISS + ONNX 模型），HTTP 化只会多一层鉴权与运维成本。
+`KnowledgeService` 与传输无关，要上远程只换外壳（`server.run("streamable-http")`）。
+
+### 自检输出（实测）
+
+```
+[1/4] 工具发现（tools/list）
+  [PASS] 工具集合 = ['get_chunk', 'list_sources', 'search_knowledge']
+  · search_knowledge  必填=['query']
+      top_k:integer 范围[1,20]   mode:string enum=['hybrid', 'bm25', 'vector']
+[2/4] 正常调用
+  [PASS] get_chunk(rag-notes.md::3) 命中
+[3/4] 非法参数必须被拒绝
+  [PASS] top_k 超上限 → 已拒绝        [PASS] chunk_id 格式不符 → 已拒绝
+[4/4] 凭据隔离
+  [PASS] Client 传给服务端的 env 不含任何 KEY/TOKEN
+结果：24 通过 / 0 失败
+```
+
 ## 目录结构
 
 ```
 ├── main.py              # CLI 入口（--check / warmup / ingest / ask / chat / web / eval / bench）
+├── mcp_server/          # MCP 服务端：把检索能力开放给其他 Agent（stdio）
+│   ├── server.py        # 工具注册、JSON Schema、stdio 启动
+│   ├── knowledge.py     # KnowledgeService：检索 / 取片段 / 文档清单（与传输无关）
+│   ├── config.py        # 服务端配置（全部来自环境变量）
+│   └── selfcheck.py     # 端到端自检（工具发现 / 正常调用 / 非法参数 / 凭据隔离）
 ├── src/
-│   ├── config.py        # 配置与路径
-│   ├── llm.py           # LLM 客户端（显式超时 + 退避重试）
-│   ├── ingest.py        # 文档加载与语义切分
-│   ├── embedder.py      # 本地向量化（fastembed / BGE）
-│   ├── vectorstore.py   # 向量索引抽象（FAISS flat/hnsw + NumPy 兜底）
-│   ├── store.py         # 索引构建、持久化、元信息与新鲜度校验
-│   ├── retriever.py     # 混合检索（BM25 + 向量 + RRF 融合，支持多路加权）
-│   ├── rewrite.py       # 查询改写（LLM 指代消解+扩展 / 规则拼接 / 关闭）
-│   ├── reranker.py      # 重排（Cross-Encoder / LLM / 不重排，含降级链路）
-│   ├── memory.py        # 多轮记忆（滑动窗口 + 摘要压缩 + 会话仓库/TTL）
-│   ├── rag.py           # 问答主流程（单轮 answer / 多轮 answer_turn）
-│   ├── web.py           # FastAPI 应用 + 单文件页面 + 并发背压
-│   └── evaluate.py      # 评测（召回率 + 片段级 MRR + 要点覆盖率 + 多轮改写对比）
+│   ├── config/             # ① 配置层：参数与环境变量的唯一出口
+│   │   └── settings.py     # .env 读取、路径常量、HF 镜像环境变量
+│   ├── core/               # ② 抽象接口层：只放契约（ABC），不含实现
+│   │   ├── llm_client.py   # BaseLLMClient：LLM 客户端接口
+│   │   ├── vector_store.py # BaseVectorStore：向量库接口
+│   │   └── reranker.py     # BaseReranker：重排器接口
+│   ├── modules/            # ③ 具体实现层：实现 core 的契约
+│   │   ├── llm.py          # LLM 客户端（显式超时 + 退避重试）
+│   │   ├── embedder.py     # 本地向量化（fastembed / BGE）
+│   │   ├── ingest.py       # 文档加载与语义切分
+│   │   ├── vectorstore.py  # 向量索引（FAISS flat/hnsw + NumPy 兜底）
+│   │   ├── store.py        # 索引构建、持久化、元信息与新鲜度校验
+│   │   ├── retriever.py    # 混合检索（BM25 + 向量 + RRF 融合，多路加权）
+│   │   ├── reranker.py     # 重排（Cross-Encoder / LLM / 不重排，含降级链路）
+│   │   ├── rewrite.py      # 查询改写（LLM 指代消解+扩展 / 规则拼接 / 关闭）
+│   │   └── memory.py       # 多轮记忆（滑动窗口 + 摘要压缩 + 会话仓库/TTL）
+│   ├── services/           # ④ 业务编排层：把检索 / 重排 / 生成串起来
+│   │   ├── rag.py          # 问答主流程（单轮 answer / 多轮 answer_turn）
+│   │   ├── evaluate.py     # 评测（召回率 + 片段级 MRR + 要点覆盖率 + 多轮对比）
+│   │   └── web.py          # FastAPI 应用 + 单文件页面 + 并发背压
+│   └── utils/              # ⑤ 通用工具层（占位：重试/日志现内联在 modules）
 ├── data/docs/           # 知识库文档（放入你的资料）
 ├── evals/               # 评测集（eval_set 30 条单轮 / multi_turn_set 15 条多轮）
 ├── index/               # 索引文件（自动生成，不提交 git）
@@ -145,7 +243,7 @@ python main.py bench                   # 向量后端与重排后端的延迟基
 
 （片段级 Recall@10 = 100%，30/30；端到端平均要点覆盖率 99%。LLM 重排的分数每次跑会有 ±0.02 波动，Cross-Encoder 完全可复现。）
 
-**向量检索延迟（真实语料 17 条）**
+**向量检索延迟（真实语料 17 条）** 
 
 | 后端 | P50 | P95 | 说明 |
 |---|---|---|---|
@@ -231,3 +329,4 @@ python main.py bench                   # 向量后端与重排后端的延迟基
 - [x] M1 混合检索 + LLM 重排 + 引用溯源 + 基础评测
 - [x] M2 FAISS 向量索引（flat/hnsw 可切换 + NumPy 兜底）、本地 Cross-Encoder 重排、片段级评测与性能基准
 - [x] M3 查询改写（指代消解 + 多路扩展 + 加权 RRF）、多轮记忆（窗口 + 摘要 + 会话持久化）、Web 界面（FastAPI + 背压）、多轮评测
+- [x] M4 MCP 服务端（search_knowledge / get_chunk / list_sources，严格 Schema + 凭据隔离 + 端到端自检），供 `deep-research-agent` 作为 MCP Client 调用

@@ -21,7 +21,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, llm
+from .. import config
+from . import llm
 
 logger = logging.getLogger(__name__)
 

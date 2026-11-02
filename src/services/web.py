@@ -17,10 +17,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from . import config, store
-from .memory import SessionStore
+from .. import config
+from ..modules import store
+from ..modules.memory import SessionStore
 from .rag import answer_turn
-from .retriever import HybridRetriever
+from ..modules.retriever import HybridRetriever
 
 logger = logging.getLogger(__name__)
 

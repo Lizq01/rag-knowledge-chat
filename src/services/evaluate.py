@@ -12,10 +12,11 @@ import json
 import re
 import time
 
-from . import llm, rag
-from .config import EVALS_DIR, RERANK_TOP_N, TOP_K
-from .reranker import rerank
-from .retriever import HybridRetriever
+from ..modules import llm
+from . import rag
+from ..config import EVALS_DIR, RERANK_TOP_N, TOP_K
+from ..modules.reranker import rerank
+from ..modules.retriever import HybridRetriever
 
 _JUDGE_PROMPT = """请检查回答是否覆盖了「要点清单」中的每一条（语义等价即可）。
 

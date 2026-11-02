@@ -17,8 +17,9 @@ import os
 import re
 import time
 
-from . import config, llm
-from .config import RERANK_MAX_CHARS, RERANK_TOP_N
+from .. import config
+from . import llm
+from ..config import RERANK_MAX_CHARS, RERANK_TOP_N
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ def _load_cross_encoder():
     started = time.perf_counter()
     try:
         # 先 import config 确保 HF 镜像环境变量已生效，再 import fastembed
-        from . import config as _config  # noqa: F401
+        from .. import config as _config  # noqa: F401
         from fastembed.rerank.cross_encoder import TextCrossEncoder
 
         threads = _config.RERANK_THREADS or min(16, os.cpu_count() or 4)

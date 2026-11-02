@@ -8,12 +8,12 @@
 """
 import time
 
-from . import llm
-from .config import RERANK_TOP_N, TOP_K
-from .memory import ConversationMemory
-from .reranker import rerank
-from .retriever import HybridRetriever
-from .rewrite import rewrite
+from ..modules import llm
+from ..config import RERANK_TOP_N, TOP_K
+from ..modules.memory import ConversationMemory
+from ..modules.reranker import rerank
+from ..modules.retriever import HybridRetriever
+from ..modules.rewrite import rewrite
 
 _ANSWER_PROMPT = """你是一个严谨的知识库问答助手，请仅依据「参考资料」回答问题：
 

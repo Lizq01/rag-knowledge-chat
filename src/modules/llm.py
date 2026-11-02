@@ -11,7 +11,7 @@ import time
 
 from openai import OpenAI
 
-from .config import (LLM_MAX_RETRIES, LLM_TIMEOUT, MODEL_NAME, OPENAI_API_KEY,
+from ..config import (LLM_MAX_RETRIES, LLM_TIMEOUT, MODEL_NAME, OPENAI_API_KEY,
                      OPENAI_BASE_URL)
 
 logger = logging.getLogger(__name__)
